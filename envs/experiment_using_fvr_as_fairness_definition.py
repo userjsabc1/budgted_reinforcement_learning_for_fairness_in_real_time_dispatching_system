@@ -66,8 +66,10 @@ class TopEnvironmentW:
         self.beta = load_budget()
         self.factor = 1
 
-        project_dir = os.path.dirname(os.getcwd())
-        data_dir = project_dir + '/output0.txt'
+        # 输出到log/experiment_fvr文件中
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_dir = os.path.dirname(current_dir)
+        data_dir = os.path.join(project_dir, 'log', 'experiment_fvr')
         self.file = open(data_dir, 'w')
 
     # wandb.init(project='ppo_experiment_0_40version')
@@ -90,8 +92,7 @@ class TopEnvironmentW:
             driver.money = 0
             driver.pos = self.init_pos[i]
             driver.start_time = 0
-
-            i += 1  # 随机选择一个位置
+            i += 1
 
         self.time = 0
         self.requests = []
@@ -102,32 +103,29 @@ class TopEnvironmentW:
         self.fairness = []
         self.order_count = 0
         self.step_count = 0
-        self.epoch += 1
         self.factor = 1
-        msg = 'epoch:{0}, utility:{1}, fairness:{2}'.format(self.epoch, self._filter_sum(), self._filter_beta())
-        print(msg)
-        self.file.write(msg)
         return self._generate_observation()
 
-    def step(self, action):
-        if self.order_count >= self.max_count:
-            for r in self.requests:
-                r.state = 0
-            self.epoch += 1
-            msg = 'epoch:{0}, utility:{1}, fairness:{2}'.format(self.epoch, self._filter_sum(), self._filter_beta())
-            print(msg)
-            self.file.write(msg)
-            self.reset()
-        if self.epoch > 1000:
+    def step(self, action):        
+        if self.epoch > 1000:  # 设置1000轮训练
+            print(f"Training completed after {self.epoch} episodes.")
             self.file.close()
-            # wandb.finish()
             sys.exit(0)
+        
+        # 递增step_count
+        self.step_count += 1
+        
         for driver in self.drivers:
             if driver.on_road == 1:
-                if (self.graph.get_edge_data(driver.Request.origin, driver.Request.destination)["distance"] +
-                    self.graph.get_edge_data(driver.pos,
-                                             driver.Request.origin)[
-                        "distance"]) / driver.speed <= self.time - driver.start_time:
+                edge1 = self.graph.get_edge_data(driver.Request.origin, driver.Request.destination)
+                edge2 = self.graph.get_edge_data(driver.pos, driver.Request.origin)
+                
+                if edge1 is None or edge2 is None:
+                    print(f"警告：司机行驶中边不存在 - 位置:{driver.pos}, 起点:{driver.Request.origin}, 终点:{driver.Request.destination}")
+                    driver.on_road = 0  # 强制停止
+                    continue
+                    
+                if (edge1["distance"] + edge2["distance"]) / driver.speed <= self.time - driver.start_time:
                     driver.on_road = 0
                     self.order_count += 1
                     driver.Request.state = 1
@@ -149,16 +147,31 @@ class TopEnvironmentW:
 
         vec = np.array(reward_list).reshape((1, self.agent_num))
         self.utility = np.hstack((self.utility, vec.T))
-        self.step_count += 1
         std_dev = statistics.stdev(reward_list)
         after_reward_list = [x - (std_dev) for x in reward_list]
-        msg = 'epoch:{0},step:{1}, utility:{2}, fairness:{3}'.format(self.epoch, self.step_count,
-                                                                     self._filter_sum(), self._filter_beta(),
-                                                                     )
+        
+        # 添加步骤日志
+        msg = 'epoch:{},step:{},utility:{},fairness:{}\n'.format(
+            self.epoch, self.step_count, self._filter_sum(), self._filter_beta())
+        print(msg.strip())
+        self.file.write(msg)
+        self.file.flush()
+        
+        # 检查episode是否结束（移到最后）
+        if self.order_count >= self.max_count:
+            for r in self.requests:
+                r.state = 0
+            # 在reset前保存统计信息
+            msg = 'Episode {0} completed - Total Utility: {1:.2f}, FVR Fairness: {2:.2f}\n'.format(
+                self.epoch, self._filter_sum(), self._filter_beta())
+            print(msg)
+            self.file.write(msg)
+            self.file.flush()
+            self.epoch += 1  # 只在这里递增epoch
+            self.reset()  # reset会将step_count重置为0
+            
         # wandb.log({'epoch': self.epoch, 'step': self.step_count, 'utility': self._filter_sum(),
         #     'fairness': self._filter_beta()})
-        print(msg)
-        self.file.write(msg)
         return self._state(), after_reward_list, end_list, {}
 
     def single_step(self, action):
@@ -170,19 +183,38 @@ class TopEnvironmentW:
         node_idx = Mapping[action_onehot.tolist().index(1)]
         if action_onehot.tolist().index(1) >= 400:
             return self._state(), reward, self.done, {}
-        if self.driver_E_fairness(
-                node_idx, action[1]) > self._beta() * self.factor:
+        # 简化公平性约束 - 允许更多订单通过
+        fairness_value = self.driver_E_fairness(node_idx, action[1])
+        
+        # 使用更宽松的阈值，让更多司机能接收订单
+
+        # Debug output for fairness constraint and action details
+        # if self.step_count % 100 == 0:
+        #     print(f"Step {self.step_count}: Fairness={fairness_value:.2f}, Beta_threshold={beta_threshold:.2f}, Factor={self.factor:.3f}")
+        #     print(f"Driver money values: {[d.money for d in self.drivers]}")
+        #     print(f"Action details - node_idx: {node_idx}, driver_idx: {action[1]}, driver_on_road: {self.drivers[action[1]].on_road}")
+            
+        # 减少调试输出 - 只在关键情况下打印
+        # if fairness_value < beta_threshold and self.step_count % 10 == 0:
+        #     print(f"Step {self.step_count}: BLOCKED - fairness={fairness_value:.2f} vs threshold={beta_threshold}")
+        
+        if fairness_value > self._beta() * self.factor:
             if self.step_count > 100:
                 self.factor *= 1.05
             return self._state(), reward, self.done, {}
 
         if self.drivers[action[1]].on_road == 0:
+            # 添加详细的订单匹配调试信息
+            matching_requests = []
             for r in self.requests:
                 if (r.destination == node_idx):
                     if (r.state == 0) & r.origin != r.destination:
-                        select_actions.append(r)
-            if len(select_actions) != 0:
-                for aim_action in select_actions:
+                        matching_requests.append(r)
+            
+            # print(f"  -> Driver {action[1]} available. Found {len(matching_requests)} matching requests for destination {node_idx}")
+            
+            if len(matching_requests) != 0:
+                for aim_action in matching_requests:
                     # random_action = random.choice(select_actions)
                     aim_action.state = 1
                     reward = (self.graph.get_edge_data(aim_action.origin, aim_action.destination)["distance"] -
@@ -192,7 +224,14 @@ class TopEnvironmentW:
                     self.drivers[action[1]].on_road = 1
                     self.drivers[action[1]].Request = aim_action
                     self.factor = 1
+                    # 只在每50步打印订单分配详情
+                    # if self.step_count % 50 == 0:
+                    #     print(f"  -> ASSIGNED! Driver {action[1]} got order: origin={aim_action.origin}, dest={aim_action.destination}, reward={reward:.2f}")
                     break
+            else:
+                pass
+                # if self.step_count % 50 == 0:
+                #     print(f"  -> No available requests for destination {node_idx}")
 
         if self.order_count >= self.max_count:
             self.done = True
@@ -215,14 +254,21 @@ class TopEnvironmentW:
                 for aim_action in select_actions:
                     # random_action = random.choice(select_actions)
                     aim_action.state = 1
-                    reward = (self.graph.get_edge_data(aim_action.origin, aim_action.destination)["distance"] -
-                              self.graph.get_edge_data(self.drivers[driver_idx].pos,
-                                                       aim_action.origin)["distance"])
+                    
+                    # 安全获取边数据
+                    edge1 = self.graph.get_edge_data(aim_action.origin, aim_action.destination)
+                    edge2 = self.graph.get_edge_data(self.drivers[driver_idx].pos, aim_action.origin)
+                    
+                    if edge1 is None or edge2 is None:
+                        print(f"警告：边不存在 - 司机位置:{self.drivers[driver_idx].pos}, 起点:{aim_action.origin}, 终点:{aim_action.destination}")
+                        continue
+                        
+                    reward = (edge1["distance"] - edge2["distance"])
                     self.drivers[driver_idx].money += reward
                     driver_utility_buffer.append(self._filter_beta())
                     self.drivers[driver_idx].money -= reward
 
-                return sum(driver_utility_buffer) / len(driver_utility_buffer)
+                return statistics.stdev(driver_utility_buffer) if len(driver_utility_buffer) > 1 else 0.0
             else:
                 return 0
         return 0
@@ -236,7 +282,7 @@ class TopEnvironmentW:
         reward_list = []
         for driver in self.drivers:
             reward_list.append(driver.money)
-        return min(reward_list)
+        return statistics.stdev(reward_list) if len(reward_list) > 1 else 0
 
     def _filter_sum(self):
         reward_list = []

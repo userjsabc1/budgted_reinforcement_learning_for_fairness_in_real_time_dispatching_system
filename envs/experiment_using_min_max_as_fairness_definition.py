@@ -65,8 +65,12 @@ class TopEnvironmentW_1:
         self.epoch = 0
         self.factor = 1
         self.beta = load_minuium_budget()
-        project_dir = os.path.dirname(os.getcwd())
-        data_dir = project_dir + '/output11.txt'
+        # 输出到log目录下的experiment_minmax.log
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        project_dir = os.path.dirname(current_dir)
+        log_dir = os.path.join(project_dir, 'log')
+        os.makedirs(log_dir, exist_ok=True)  # 确保log目录存在
+        data_dir = os.path.join(log_dir, 'experiment_minmax.log')
         self.file = open(data_dir, 'w')
 
     # self.wandb = wandb.init(project='ppo_experiment_1')
@@ -89,37 +93,31 @@ class TopEnvironmentW_1:
             driver.money = 0
             driver.pos = self.init_pos[i]
             driver.start_time = 0
-
-            i += 1  # 随机选择一个位置
+            i += 1
 
         self.time = 0
         self.requests = []
         self.requests.extend(self.all_requests[0])
+        # 重置所有请求状态为可用
+        for r in self.requests:
+            r.state = 0
         self.done = False
         self.utility = np.zeros((self.agent_num, 1))
         self.reward = np.zeros((self.agent_num, 1))
         self.fairness = []
         self.order_count = 0
         self.step_count = 0
-        self.epoch += 1
         self.factor = 1
-        msg = 'epoch:{0}, utility:{1}, fairness:{2}'.format(self.epoch, self._filter_sum(), self._filter_beta())
-        print(msg)
-        self.file.write(msg)
         return self._generate_observation()
 
     def step(self, action):
-        if self.order_count >= self.max_count:
-            for r in self.requests:
-                r.state = 0
-            self.epoch += 1
-            msg = 'epoch:{0}, utility:{1}, fairness:{2}'.format(self.epoch, self._filter_sum(), self._filter_beta(),self._beta())
-            print(msg)
-            self.file.write(msg)
-            self.reset()
-        if self.epoch > 1000:
+        if self.epoch > 1000:  # 设置1000轮训练
+            print(f"Training completed after {self.epoch} episodes.")
             self.file.close()
             sys.exit(0)
+        
+        # 递增step_count
+        self.step_count += 1
         for driver in self.drivers:
             if driver.on_road == 1:
                 if (self.graph.get_edge_data(driver.Request.origin, driver.Request.destination)["distance"] +
@@ -146,13 +144,27 @@ class TopEnvironmentW_1:
         self.time += self.timestep
 
         after_reward_list = [x + (min(reward_list) / self.agent_num) for x in reward_list]
-        self.step_count += 1
-
-        msg = 'epoch:{0},step:{1}, utility:{2}, fairness:{3},beta:{4}'.format(self.epoch, self.step_count,
-                                                                              self._filter_sum(), self._filter_beta(),self._beta())
-        #     wandb.log({'epoch': self.epoch, 'step':self.step_count,'utility': self._filter_sum(), 'fairness': self._filter_beta()})
-        print(msg)
+        
+        # 添加步骤日志
+        msg = 'epoch:{},step:{},utility:{},fairness:{}\n'.format(
+            self.epoch, self.step_count, self._filter_sum(), self._filter_beta())
+        print(msg.strip())
         self.file.write(msg)
+        self.file.flush()
+        
+        # 检查episode是否结束（移到最后）
+        if self.order_count >= self.max_count or self.step_count > 400:
+            for r in self.requests:
+                r.state = 0
+            # 在reset前保存统计信息
+            msg = 'Episode {0} completed - Total Utility: {1:.2f}, Min Fairness: {2:.2f}\n'.format(
+                self.epoch, self._filter_sum(), self._filter_beta())
+            print(msg)
+            self.file.write(msg)
+            self.file.flush()
+            self.epoch += 1  # 只在这里递增epoch
+            self.reset()  # reset会将step_count重置为0
+        #     wandb.log({'epoch': self.epoch, 'step':self.step_count,'utility': self._filter_sum(), 'fairness': self._filter_beta()})
         return self._state(), after_reward_list, end_list, {}
 
     def single_step(self, action):
@@ -215,13 +227,18 @@ class TopEnvironmentW_1:
                     if (r.state == 0) & r.origin != r.destination:
                         select_actions.append(r)
             if len(select_actions) != 0:
+                # 保存原始状态
+                original_states = [aim_action.state for aim_action in select_actions]
                 for aim_action in select_actions:
-                    # random_action = random.choice(select_actions)
+                    # 临时标记为已使用（仅用于计算）
                     aim_action.state = 1
                     reward = (self.graph.get_edge_data(aim_action.origin, aim_action.destination)["distance"] -
                               self.graph.get_edge_data(self.drivers[driver_idx].pos,
                                                        aim_action.origin)["distance"])
                     request_money.append(reward + self.drivers[driver_idx].money)
+                # 恢复原始状态
+                for i, aim_action in enumerate(select_actions):
+                    aim_action.state = original_states[i]
                 return min(min(request_money),self._filter_beta())
             else:
                 return 0

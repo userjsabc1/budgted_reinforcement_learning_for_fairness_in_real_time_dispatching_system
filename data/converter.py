@@ -37,7 +37,18 @@ def create_mapping(filename):
 
     return mapping
 
-project_dir = os.path.dirname(os.getcwd())
-file_path = project_dir + '/data/bay_vio_data_03_19.csv'
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# 优先使用重新映射的文件
+remapped_file_path = os.path.join(current_dir, 'bay_vio_data_03_19_remapped.csv')
+original_file_path = os.path.join(current_dir, 'bay_vio_data_03_19.csv')
+
+if os.path.exists(remapped_file_path):
+    file_path = remapped_file_path
+    print(f"使用重新映射的数据文件: {file_path}")
+else:
+    file_path = original_file_path
+    print(f"使用原始数据文件: {file_path}")
+    
 Mapping = create_mapping(file_path)
-print(Mapping)
+print(f"映射长度: {len(Mapping)}")
+print(f"前10个映射: {dict(list(Mapping.items())[:10])}")

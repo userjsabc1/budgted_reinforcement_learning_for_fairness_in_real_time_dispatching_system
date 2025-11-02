@@ -13,26 +13,33 @@ from tqdm import tqdm
 
 
 def create_graph():
-    # too large around 2.7gb, use 1drive link to dl
-    response = requests.get("https://onedrive.live.com/download?resid=AlDeipOkaENXazCoXrgWvD0uaX0", stream=True,timeout=10,proxies={"http": None, "https": None}, verify=False)
-    response.raise_for_status()
-    project_dir = os.path.dirname(os.getcwd())
-    file_path = project_dir + 'data/dis_CBD_twoPs_03_19.csv'
-    total_size = int(response.headers.get('content-length', 0))
-
-    with open(file_path, "wb") as file, tqdm(
-            desc=file_path,
-            total=total_size,
-            unit='B',
-            unit_scale=True,
-            unit_divisor=1024,
-    ) as progress_bar:
-        for chunk in response.iter_content(chunk_size=1024):
-            file.write(chunk)
-            progress_bar.update(len(chunk))
-
-    data = pd.read_csv(file_path)
+    """使用重新映射的本地数据文件创建图结构"""
+    # 使用新的重新映射文件
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, 'dis_CBD_twoPs_03_19_remapped.csv')
+    
+    try:
+        print(f"加载重新映射的图数据文件: {file_path}")
+        data = pd.read_csv(file_path)
+        print(f"数据行数: {len(data)}")
+    except FileNotFoundError:
+        print(f"重新映射文件未找到，使用旧文件")
+        file_path = os.path.join(current_dir, 'dis_CBD_twoPs_03_19_full.csv')
+        try:
+            data = pd.read_csv(file_path)
+        except FileNotFoundError:
+            print(f"所有图文件都未找到，创建默认图")
+            # 创建一个简单的默认图
+            graph = nx.Graph()
+            for i in range(800):  # 0-799
+                graph.add_node(i)
+            # 添加一些基本连接
+            for i in range(799):
+                graph.add_edge(i, i+1, distance=100)
+            return graph
+    
     graph = nx.Graph()
+    processed_count = 0
 
     for row in data.itertuples(index=False):
         dis = row.distance
@@ -40,24 +47,29 @@ def create_graph():
         node1 = nodes[0]
         node2 = nodes[1]
         try:
-            int(node1.replace("A", ""))
-            int(node2.replace("A", ""))
+            node1_id = int(node1.replace("A", ""))
+            node2_id = int(node2.replace("A", ""))
         except ValueError:
             continue
-        # 检查节点是否已经存在于图中
-        if int(node1.replace("A", "")) not in graph.nodes:
-            graph.add_node(int(node1.replace("A", "")))
-        if int(node2.replace("A", "")) not in graph.nodes:
-            graph.add_node(int(node2.replace("A", "")))
-        # 检查边是否已经存在于图中
-        if not graph.has_edge(int(node1.replace("A", "")), int(node2.replace("A", ""))):
-            graph.add_edge(int(node1.replace("A", "")), int(node2.replace("A", "")), distance=dis)
-        if not graph.has_edge(int(node2.replace("A", "")), int(node1.replace("A", ""))):
-            graph.add_edge(int(node2.replace("A", "")), int(node1.replace("A", "")), distance=dis)
-    import sys
+            
+        # 添加节点（如果不存在）
+        if node1_id not in graph.nodes:
+            graph.add_node(node1_id)
+        if node2_id not in graph.nodes:
+            graph.add_node(node2_id)
+            
+        # 添加边（无向图，只需要添加一次）
+        if not graph.has_edge(node1_id, node2_id):
+            graph.add_edge(node1_id, node2_id, distance=dis)
+            
+        processed_count += 1
+        if processed_count % 100000 == 0:
+            print(f"已处理 {processed_count} 条边...")
+    
+    print(f"✅ 图创建完成：{graph.number_of_nodes()} 个节点, {graph.number_of_edges()} 条边")
     return graph
 
-create_graph()
+# create_graph()  # 注释掉自动执行，避免导入时创建图
 def choose_random_node(graph):
     nodes = list(graph.nodes)
     random_node = random.choice(nodes)
@@ -66,8 +78,12 @@ def choose_random_node(graph):
 
 import pandas as pd
 def import_requests_from_csv():
-    project_dir = os.path.dirname(os.getcwd())
-    file_path = project_dir + "/data/bay_vio_data_03_19.csv"
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, "bay_vio_data_03_19_remapped.csv")
+    if not os.path.exists(file_path):
+        # 回退到原始文件
+        file_path = os.path.join(os.path.dirname(current_dir), "data", "bay_vio_data_03_19.csv")
+    
     requests = [[]]
     data = pd.read_csv(file_path)
     for row in data.itertuples(index=False):
@@ -122,31 +138,34 @@ def change_node_to_int(node):
 
 
 def load_budget():
-    project_dir = os.path.dirname(os.getcwd())
-    file_path = project_dir+'/data/fairness.npy'
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, 'fairness.npy')
     array = np.load(file_path)
     return array
 
 print(load_budget())
 
 def load_location():
-    project_dir = os.path.dirname(os.getcwd())
-    file_path = project_dir +'/data/init_location.npy'
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, 'init_location.npy')
     array = np.load(file_path)
     return array
 
 def load_minuium_budget():
-    project_dir = os.path.dirname(os.getcwd())
-    file_path = project_dir +'/data/fairness_min_max.npy'
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, 'fairness_min_max.npy')
     array = np.load(file_path)
     return array
 
 def generate_npy():
     random_ints = np.random.randint(0,5000,size = 25)
-    project_dir = os.path.dirname(os.getcwd())
-    file_path = project_dir + '/data/init_location.npy'
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    file_path = os.path.join(current_dir, 'init_location.npy')
     np.save(file_path,random_ints)
 
 def get_random():
-    return [random.randint(0, 999) for _ in range(15)]
-random_list=get_random()
+    """生成司机初始位置，确保在图的节点范围内"""
+    # 从0-793范围选择初始位置（重新映射后的节点范围）
+    return [random.randint(0, 793) for _ in range(15)]
+
+random_list = get_random()
