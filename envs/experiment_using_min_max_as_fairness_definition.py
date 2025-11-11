@@ -144,14 +144,7 @@ class TopEnvironmentW_1:
         self.time += self.timestep
 
         after_reward_list = [x + (min(reward_list) / self.agent_num) for x in reward_list]
-        
-        # 添加步骤日志
-        msg = 'epoch:{},step:{},utility:{},fairness:{}\n'.format(
-            self.epoch, self.step_count, self._filter_sum(), self._filter_beta())
-        print(msg.strip())
-        self.file.write(msg)
-        self.file.flush()
-        
+
         # 检查episode是否结束（移到最后）
         if self.order_count >= self.max_count or self.step_count > 400:
             for r in self.requests:
